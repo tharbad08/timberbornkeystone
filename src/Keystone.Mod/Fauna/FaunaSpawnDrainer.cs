@@ -133,6 +133,17 @@ namespace Keystone.Mod.Fauna {
     /// blueprint).</summary>
     private readonly HashSet<string> _warnedBlueprints = new();
 
+    /// <summary>Static Class E recipe buckets grouped once per biome.
+    /// The catalog is populated at PostLoad and remains unchanged for
+    /// the lifetime of this drainer. Reusing these buckets removes
+    /// per-cluster dictionary/list allocation and recipe enumeration.</summary>
+    private readonly Dictionary<BiomeKind, Dictionary<string, List<ClassERecipe>>> _bucketsByBiome = new();
+
+    /// <summary>Lazy exact-match index for registry lookup. A blueprint
+    /// that appears in multiple recipes resolves to its first recipe,
+    /// matching the previous linear search semantics.</summary>
+    private Dictionary<string, ClassERecipe>? _recipeByBlueprint;
+
     #endregion
 
     #region Construction
@@ -260,15 +271,11 @@ namespace Keystone.Mod.Fauna {
       var chunks = _clusterIndex.ChunksIn(clusterId);
       if (chunks.Count == 0) return VisitOutcome.Invalid;
 
-      // Group recipes by levelId for this biome.
-      var bucketsByLevel = new Dictionary<string, List<Keystone.Core.Biomes.ClassERecipe>>();
-      foreach (var recipe in _catalog.ClassEForBiome(biome.Value)) {
-        if (!bucketsByLevel.TryGetValue(recipe.LevelId, out var bucket)) {
-          bucket = new List<Keystone.Core.Biomes.ClassERecipe>();
-          bucketsByLevel[recipe.LevelId] = bucket;
-        }
-        bucket.Add(recipe);
-      }
+      // Catalog recipe data is immutable after PostLoad, so we can
+      // reuse the same bucket lists for every cluster in this biome.
+      // Before PostLoad, build them without caching to avoid holding
+      // a permanently empty catalog index.
+      var bucketsByLevel = GetRecipeBuckets(biome.Value);
       if (bucketsByLevel.Count == 0) return VisitOutcome.Invalid;
 
       // Walk the registry once, bucket by levelId, filter to this
@@ -441,11 +448,43 @@ namespace Keystone.Mod.Fauna {
       return _clusterIndex.ClusterFor(region.Id, chunkX, chunkY);
     }
 
-    private Keystone.Core.Biomes.ClassERecipe? FindRecipeForBlueprint(string blueprintName) {
-      foreach (var r in _catalog.AllClassE) {
-        if (r.BlueprintName == blueprintName) return r;
+    private Dictionary<string, List<ClassERecipe>> GetRecipeBuckets(BiomeKind biome) {
+      if (_catalog.IsLoaded && _bucketsByBiome.TryGetValue(biome, out var cached)) {
+        return cached;
       }
-      return null;
+      var buckets = new Dictionary<string, List<ClassERecipe>>();
+      foreach (var recipe in _catalog.ClassEForBiome(biome)) {
+        if (!buckets.TryGetValue(recipe.LevelId, out var bucket)) {
+          bucket = new List<ClassERecipe>();
+          buckets.Add(recipe.LevelId, bucket);
+        }
+        bucket.Add(recipe);
+      }
+      if (_catalog.IsLoaded) {
+        _bucketsByBiome.Add(biome, buckets);
+      }
+      return buckets;
+    }
+
+    private ClassERecipe? FindRecipeForBlueprint(string blueprintName) {
+      // Before catalog PostLoad completes, retain the original
+      // lookup rather than caching an incomplete recipe list.
+      if (!_catalog.IsLoaded || blueprintName == null) {
+        foreach (var recipe in _catalog.AllClassE) {
+          if (recipe.BlueprintName == blueprintName) return recipe;
+        }
+        return null;
+      }
+      if (_recipeByBlueprint == null) {
+        var index = new Dictionary<string, ClassERecipe>(System.StringComparer.Ordinal);
+        foreach (var recipe in _catalog.AllClassE) {
+          if (recipe.BlueprintName != null && !index.ContainsKey(recipe.BlueprintName)) {
+            index.Add(recipe.BlueprintName, recipe);
+          }
+        }
+        _recipeByBlueprint = index;
+      }
+      return _recipeByBlueprint.TryGetValue(blueprintName, out var result) ? result : null;
     }
 
     private Keystone.Core.Biomes.ClassERecipe PickWeighted(
