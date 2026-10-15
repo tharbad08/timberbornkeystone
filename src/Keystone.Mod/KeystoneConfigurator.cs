@@ -341,6 +341,9 @@ namespace Keystone.Mod {
       // produces visible population convergence right as the player
       // slows down. Frustum-gated to hide the visible pop.
       Bind<Keystone.Mod.Fauna.FaunaSpawnDrainer>().AsSingleton();
+      // Native template prewarming uses the game's own cached prefabs,
+      // after the game has loaded all template collections.
+      Bind<Keystone.Mod.Fauna.KeystoneFaunaTemplatePrewarmer>().AsSingleton();
       Bind<Keystone.Mod.Fauna.FaunaTopologyChangeWatcher>().AsSingleton();
       // FaunaTopologyChangeWatcher subscribes to BlockObjectSetEvent +
       // ITerrainService.TerrainHeightChanged at Load(), so it has to

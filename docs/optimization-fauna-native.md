@@ -1,25 +1,37 @@
-# Native fauna hot-path caching (Keystone 1.3.3 / Timberborn 1.1)
+# Native Keystone fauna optimizations (Timberborn 1.1 / Keystone 1.3.3)
 
-## Problem
-`FaunaSpawnDrainer.VisitCluster` runs whenever queued fauna clusters are drained. Previously, every visit re-enumerated Class E recipes for the selected biome and allocated fresh level-bucket dictionaries and lists. Every existing fauna entry also looked up its blueprint by linearly scanning `FlourishCatalog.AllClassE`. These are repeated operations while a queue is active, not one-time startup work.
+## Origin and scope
 
-## Change
-- Group recipes by level once per biome in the existing drainer (lazy, only after `FlourishCatalog.IsLoaded`).
-- Build a first-match blueprint-name index lazily after catalog PostLoad.
-- Preserve exact-match (ordinal) blueprint comparison, the **first registered duplicate** rule, recipe ordering, per-cluster deficit calculation, camera/frustum checks, callbacks, and queue behavior.
-- Keep `MaxSpawnsPerFrame = 2` and `MaxVisitsPerFrame = 6`. No deferred/dropped fauna spawns or change to population convergence.
-- Caches live only inside the world-scoped drainer. No new static/global caches and no Harmony patches.
+Port **all three** Keystone-specific TB Optimizer features into Keystone's own source. Unlike an external Harmony adapter, these modifications use existing Keystone classes, game services, and the native startup lifecycle. No new mod dependency or Harmony patch is introduced.
 
-## Deliberately excluded
-The previous PR reduced `MaxSpawnsPerFrame` to 1, changing fauna replenishment throughput. That is pacing, not a proven CPU-work reduction; this replacement retains the original limit.
-`ChunkBiomeTicker` and `ChunkClusterTicker` already maintain topology-aware cached schedules and parallel/rolling sweeps; `EcologyFieldUpdater` already caches schedules and pools its worker arrays. No speculative changes are made to them without a new measured bottleneck. Fauna template prewarming is also omitted until its actual startup lifecycle and benefit are verified.
+### 1. One actual fauna spawn per frame
 
-## Validation (pending exact-source build and game tests)
-1. Build against real Timberborn 1.1 and Keystone dependencies; do not use invented API stubs.
-2. Measure `Fauna.Drain` frame time, allocation count, `Fauna.Drain.Visits`, and `Fauna.Drain.Spawns` on the same colony at x1/x3; record baseline and sample size.
-3. Verify recipes and first-match duplicates produce the same assigned level, category and spawn weights.
-4. Verify startup, game reload, queue catch-up, fish/deer/cattle populations, and camera-blocked regions.
-5. Disable external TB Optimizer Keystone patches while testing to avoid double optimization.
-6. Check crash logs and test with both fresh and old colonies.
+`FaunaSpawnDrainer.MaxSpawnsPerFrame` changes **2 → 1**. The original drainer handles the queue itself: a successful spawn re-enqueues the cluster, and unfilled deficits stay available for later visits. No fabricated "successful" return and no second queue are necessary. **Behavior change:** catch-up rate is intentionally reduced (at most 60 vs 120 spawns/sec at 60 fps); this limits costly same-frame allocations, it does not reduce the total work to spawn the same population.
 
-**Status:** Source inspection and the changes above only. No measured speedup is claimed and the exact branch has not been compiled or run in-game here.
+### 2. Cache Class E recipe lookups
+
+- Cache the first recipe for each blueprint name after `FlourishCatalog.PostLoad`, preserving the previous first-match behavior and ordinal comparisons.
+- Cache `ClassEForBiome` level buckets in the world-scoped drainer so repeated cluster visits reuse recipe lists instead of allocating new dictionaries and scanning the same immutable catalog each visit.
+- Before the catalog reports `IsLoaded`, keep the previous lookup behavior and do not freeze empty lists.
+
+### 3. Prewarm three fauna templates
+
+The new `KeystoneFaunaTemplatePrewarmer` receives the game's `TemplateCollectionService` and `TemplateInstantiator` through Bindito. After `KeystoneStartupWarmup.PostLoad` completes normal ecology initialization, it finds `KeystoneCow`, `KeystoneBull`, and `KeystoneDeer` in the loaded template collection and calls the game's `CacheInstance(blueprint)`. This uses the **vanilla template cache** (no parallel cache), records timings in verbose logs, and catches exceptions so a failed optional prewarm does not break the colony. Timing differs slightly from TB Optimizer's `ShowPrimaryUI` patch: it occurs during Keystone's completed PostLoad warmup rather than at UI display. Verify first-frame and loading-time behavior in the game.
+
+## Preserved invariants
+
+- `MaxVisitsPerFrame = 6`, camera/frustum gating, cluster iteration, live registry counts, and spawn re-enqueue semantics
+- No global/static world cache and no Harmony hook ownership conflicts inside Keystone
+- All recipe weights, category settings, levels, persistence, and entity cleanup paths untouched
+
+## Validation and evidence
+
+- [x] Audited TB Optimizer's three Keystone files and Keystone upstream's preexisting implementations.
+- [x] Kept the three contributions in one separately reviewable native-performance branch, independent of MoM compatibility.
+- [ ] Compile **this exact commit** against Timberborn 1.1 and actual required mod assemblies.
+- [ ] Run same-save x1/x3 before/after benchmarks: `Fauna.Drain` duration, allocs, count, peak frame times, real x3 throughput, no silent skipped work.
+- [ ] Verify first-duplicate recipe lookup, new/loaded worlds, fish/cattle/deer, camera-blocked clusters, retry/queue carryover.
+- [ ] Measure and inspect startup prewarming in `Player.log` for all three animals; check no type-load failure.
+- [ ] Disable matching TB Optimizer external Keystone features during testing to avoid duplicate prewarm and pacing layers.
+
+**Status:** source prepared, but uncompiled and without in-game regression measurements. No measured performance improvement is claimed.

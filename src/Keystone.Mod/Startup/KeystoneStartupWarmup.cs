@@ -4,6 +4,7 @@ using Keystone.Core.Persistence;
 using Keystone.Mod.Biomes;
 using Keystone.Mod.Diagnostics;
 using Keystone.Mod.Ecology;
+using Keystone.Mod.Fauna;
 using Keystone.Mod.Persistence;
 using Keystone.Mod.Recipes;
 using Keystone.Mod.Surface;
@@ -95,6 +96,7 @@ namespace Keystone.Mod.Startup {
     private readonly KeystoneFloraSettings _floraSettings;
     private readonly TileSlotRegistry _tileSlotRegistry;
     private readonly SurfaceFieldStore _surfaceFields;
+    private readonly KeystoneFaunaTemplatePrewarmer _faunaTemplatePrewarmer;
 
     public KeystoneStartupWarmup(
         ChunkValueRegistry valueRegistry,
@@ -108,7 +110,8 @@ namespace Keystone.Mod.Startup {
         PerfTracker perf,
         KeystoneFloraSettings floraSettings,
         TileSlotRegistry tileSlotRegistry,
-        SurfaceFieldStore surfaceFields) {
+        SurfaceFieldStore surfaceFields,
+        KeystoneFaunaTemplatePrewarmer faunaTemplatePrewarmer) {
       _valueRegistry = valueRegistry;
       _fieldUpdater = fieldUpdater;
       _biomeTicker = biomeTicker;
@@ -121,6 +124,7 @@ namespace Keystone.Mod.Startup {
       _floraSettings = floraSettings;
       _tileSlotRegistry = tileSlotRegistry;
       _surfaceFields = surfaceFields;
+      _faunaTemplatePrewarmer = faunaTemplatePrewarmer;
     }
 
     /// <inheritdoc />
@@ -259,6 +263,12 @@ namespace Keystone.Mod.Startup {
         if (isNewGame) {
           _perf.RecordOnce("Rule pass (new game)", rulesMs);
         }
+
+        // Cache Keystone's Cow/Bull/Deer templates only after regular
+        // game template Load and the existing ecology warmup are complete.
+        // This moves their first instantiate cost into the loading phase.
+        // The service isolates per-template failures from startup.
+        _faunaTemplatePrewarmer.RunAfterLoad();
 
         KeystoneLog.Verbose(
             $"[Keystone] Startup warmup: field updater {fieldMs} ms " +

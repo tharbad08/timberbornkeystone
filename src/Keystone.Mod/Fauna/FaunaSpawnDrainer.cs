@@ -67,12 +67,12 @@ namespace Keystone.Mod.Fauna {
 
     /// <summary>Hard cap on spawns per frame across all clusters.
     /// Bounded to keep per-frame allocation cost tiny even when the
-    /// queue is large. At 60fps a cap of 2 drains 120 fauna/sec — the
+    /// queue is large. At 60fps a cap of 1 drains up to 60 fauna/sec — the
     /// system typically has nowhere near that to spawn at steady
     /// state, so this is the recovery budget for when a big chunk of
     /// terrain newly qualifies and clusters fill up post-load /
     /// post-fast-forward.</summary>
-    private const int MaxSpawnsPerFrame = 2;
+    private const int MaxSpawnsPerFrame = 1;
 
     /// <summary>Maximum cluster visits per frame, separate from spawns.
     /// A visit that finds the cluster camera-blocked or finds no
